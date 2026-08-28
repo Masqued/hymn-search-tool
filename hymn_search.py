@@ -28,7 +28,7 @@ class HymnSearcher:
     """Search hymnary.org and extract hymn data."""
     
     BASE_URL = "https://hymnary.org"
-    TIMEOUT = 30000  # 30 seconds in milliseconds
+    TIMEOUT = 60000  # 60 seconds in milliseconds (increased for challenge)
     
     def __init__(self, debug: bool = False):
         """Initialize the searcher."""
@@ -52,7 +52,15 @@ class HymnSearcher:
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(headless=True)
         self.context = self.browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            extra_http_headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Cache-Control": "max-age=0",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+            }
         )
     
     def stop(self):
@@ -71,50 +79,45 @@ class HymnSearcher:
         
         page = self.context.new_page()
         try:
-            # Try different search parameter variations
-            search_urls = [
-                f"{self.BASE_URL}/search?qu={query.replace(' ', '+')}",
-                f"{self.BASE_URL}/search?query={query.replace(' ', '+')}",
-                f"{self.BASE_URL}/search?keywords={query.replace(' ', '+')}",
-            ]
+            # Use the correct parameter: qu=
+            search_url = f"{self.BASE_URL}/search?qu={query.replace(' ', '+')}"
             
-            content = None
-            for search_url in search_urls:
+            if self.debug:
+                print(f"   URL: {search_url}")
+            
+            page.goto(search_url, wait_until="networkidle", timeout=self.TIMEOUT)
+            
+            if self.debug:
+                print(f"   Page loaded, waiting for content...")
+            
+            # Wait longer for JavaScript to fully render (handles Bunny Shield challenge)
+            time.sleep(4)
+            
+            # Wait for any dynamic content to load
+            try:
+                page.wait_for_selector('a[href*="/hymn/"], a[href*="/text/"]', timeout=10000)
+            except PlaywrightTimeout:
                 if self.debug:
-                    print(f"   Trying URL: {search_url}")
-                
-                try:
-                    page.goto(search_url, wait_until="networkidle", timeout=self.TIMEOUT)
-                    content = page.content()
-                    
-                    # Check if we got actual search results
-                    if 'hymn' in content.lower() or 'result' in content.lower():
-                        if self.debug:
-                            print(f"   ✓ Got results from this URL")
-                        break
-                except Exception as e:
-                    if self.debug:
-                        print(f"   ✗ Failed: {e}")
-                    continue
+                    print(f"   No hymn links found after waiting")
             
-            if not content:
-                if self.debug:
-                    print(f"   Could not load search results")
-                return []
-            
-            # Wait a bit for JavaScript to render
-            time.sleep(2)
-            
-            # Get fresh content after wait
+            # Get page content
             content = page.content()
             
             if self.debug:
                 print(f"   Page loaded ({len(content)} bytes)")
             
+            # Check if we're still on the challenge page
+            if "Establishing a secure connection" in content or "bunny-shield" in content:
+                if self.debug:
+                    print(f"   ⚠ Still on security challenge page")
+                # Wait even longer and try again
+                time.sleep(5)
+                content = page.content()
+            
             # Parse HTML
             soup = BeautifulSoup(content, 'html.parser')
             
-            # Find all hymn links - check multiple possible selectors
+            # Find all hymn links
             hymn_links = []
             
             # Strategy 1: Look for links with hymn or text in href
@@ -127,9 +130,8 @@ class HymnSearcher:
                     elif href.startswith('http'):
                         hymn_links.append(href)
             
-            # Strategy 2: Look for result container patterns (common in search results)
+            # Strategy 2: Look for result container patterns
             if not hymn_links:
-                # Try to find search result containers
                 for result_div in soup.find_all(['div', 'li'], class_=['result', 'search-result', 'hymn-result']):
                     link = result_div.find('a', href=True)
                     if link:
@@ -164,7 +166,7 @@ class HymnSearcher:
                 print(f"   Fetching: {url}")
             
             page.goto(url, wait_until="networkidle", timeout=self.TIMEOUT)
-            time.sleep(1)
+            time.sleep(2)
             
             content = page.content()
             soup = BeautifulSoup(content, 'html.parser')
@@ -271,7 +273,7 @@ Examples:
             if not hymn_urls:
                 print(f"❌ No hymns found for: \"{args.query}\"")
                 if args.debug:
-                    print(f"💡 Try running with --debug flag to see what's happening")
+                    print(f"💡 Check debug_search.html to see what was loaded")
                 sys.exit(1)
             
             print(f"\n📚 Found {len(hymn_urls)} result(s)")
