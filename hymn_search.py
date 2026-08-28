@@ -44,8 +44,8 @@ class HymnSearcher:
             'Upgrade-Insecure-Requests': '1',
         })
     
-    def search(self, query: str) -> List[str]:
-        """Search hymnary.org and return list of hymn URLs."""
+    def search(self, query: str) -> List[Dict[str, str]]:
+        """Search hymnary.org and return list of hymn data with URLs."""
         print(f"🔍 Searching for: \"{query}\"")
         
         try:
@@ -77,42 +77,78 @@ class HymnSearcher:
             # Parse HTML
             soup = BeautifulSoup(content, 'html.parser')
             
-            # Find all hymn links
-            hymn_links = []
+            # Find all hymn results
+            hymn_results = []
             
-            # Look for links with hymn or text in href
-            for link in soup.find_all('a', href=True):
-                href = link['href']
-                if '/hymn/' in href or '/text/' in href:
-                    # Convert to absolute URL if relative
-                    if href.startswith('/'):
-                        hymn_links.append(urljoin(self.BASE_URL, href))
-                    elif href.startswith('http'):
-                        hymn_links.append(href)
-            
-            # Remove duplicates and sort
-            hymn_links = sorted(list(set(hymn_links)))
+            # Look for h2 tags containing hymn titles
+            for h2 in soup.find_all('h2'):
+                # Find the link within the h2
+                link = h2.find('a', href=True)
+                if not link:
+                    continue
+                
+                hymn_url = link['href']
+                if not (hymn_url.startswith('/') or hymn_url.startswith('http')):
+                    continue
+                
+                # Convert to absolute URL if relative
+                if hymn_url.startswith('/'):
+                    hymn_url = urljoin(self.BASE_URL, hymn_url)
+                
+                # Extract title from span with class "highlight"
+                title_span = link.find('span', class_='highlight')
+                if not title_span:
+                    if self.debug:
+                        print(f"   ⚠ No highlight span found in link")
+                    continue
+                
+                title = title_span.get_text().strip()
+                if not title:
+                    if self.debug:
+                        print(f"   ⚠ No title text found")
+                    continue
+                
+                # Look for author in the parent or surrounding elements
+                # The author should be in a span with data-fieldname="author"
+                author = ""
+                parent = h2.parent
+                if parent:
+                    author_span = parent.find('span', attrs={'data-fieldname': 'author'})
+                    if author_span:
+                        # Get the text and remove the "Author: " prefix
+                        author_text = author_span.get_text().strip()
+                        author_text = author_text.replace('Author:', '').strip()
+                        author = author_text
+                
+                if self.debug:
+                    print(f"   Found: {title}")
+                    print(f"     Author: {author if author else '(not found)'}")
+                    print(f"     URL: {hymn_url}")
+                
+                hymn_results.append({
+                    'title': title,
+                    'author': author,
+                    'url': hymn_url
+                })
             
             if self.debug:
-                print(f"   Found {len(hymn_links)} hymn link(s)")
-                for link in hymn_links[:5]:
-                    print(f"     - {link}")
+                print(f"   Found {len(hymn_results)} hymn(s)")
                 # Save HTML for debugging
                 with open('debug_search.html', 'w', encoding='utf-8') as f:
                     f.write(content)
                 print(f"   Saved page HTML to debug_search.html")
             
-            return hymn_links
+            return hymn_results
         
         except requests.exceptions.RequestException as e:
             print(f"❌ Request error: {e}")
             return []
     
-    def extract_hymn_data(self, url: str) -> Optional[Dict[str, str]]:
-        """Extract hymn data from a hymn page."""
+    def extract_tune(self, url: str) -> str:
+        """Extract tune information from a hymn detail page."""
         try:
             if self.debug:
-                print(f"   Fetching: {url}")
+                print(f"     Fetching tune from: {url}")
             
             response = self.session.get(url, timeout=self.TIMEOUT)
             response.raise_for_status()
@@ -120,71 +156,28 @@ class HymnSearcher:
             content = response.text
             soup = BeautifulSoup(content, 'html.parser')
             
-            # Extract title
-            title = None
-            title_elem = soup.find('title')
-            if title_elem:
-                title = title_elem.get_text().replace(' - Hymnary.org', '').strip()
-            
-            if not title:
-                h1 = soup.find('h1')
-                if h1:
-                    title = h1.get_text().strip()
-            
-            if not title:
-                og_title = soup.find('meta', property='og:title')
-                if og_title and og_title.get('content'):
-                    title = og_title['content'].strip()
-            
-            if not title:
-                if self.debug:
-                    print(f"     ⚠ No title found")
-                return None
-            
-            # Extract author
-            author = ""
-            for elem in soup.find_all(string=True):
-                if 'Author' in elem or 'Words by' in elem:
-                    parent = elem.parent
-                    # Get text from parent and siblings
-                    text = parent.get_text().strip()
-                    # Clean up the text
-                    text = text.replace('Author:', '').replace('Words by:', '').strip()
-                    if text and len(text) < 200:  # Reasonable length
-                        author = text
-                        break
-            
-            # Extract tune
+            # Look for tune information
             tune = ""
-            for elem in soup.find_all(string=True):
-                if 'Tune' in elem:
-                    parent = elem.parent
-                    text = parent.get_text().strip()
-                    text = text.replace('Tune:', '').replace('Tune Name:', '').strip()
-                    if text and len(text) < 100:  # Reasonable length
-                        tune = text
-                        break
+            tune_span = soup.find('span', attrs={'data-fieldname': 'tune'})
+            if tune_span:
+                # Get the text and remove the "Tune: " prefix
+                tune_text = tune_span.get_text().strip()
+                tune_text = tune_text.replace('Tune:', '').replace('Tune Name:', '').strip()
+                tune = tune_text
+                
+                if self.debug:
+                    print(f"       Tune: {tune if tune else '(not found)'}")
             
-            if self.debug:
-                print(f"     ✓ Title: {title}")
-                print(f"       Author: {author if author else '(not found)'}")
-                print(f"       Tune: {tune if tune else '(not found)'}")
-            
-            return {
-                'title': title,
-                'author': author,
-                'tune': tune,
-                'url': url
-            }
+            return tune
         
         except requests.exceptions.RequestException as e:
             print(f"     ⚠ Error loading page: {e}")
-            return None
+            return ""
         
         except Exception as e:
             if self.debug:
                 print(f"     ⚠ Error processing page: {e}")
-            return None
+            return ""
 
 
 def main():
@@ -204,6 +197,7 @@ Examples:
     parser.add_argument('output', nargs='?', default='hymn_results.csv',
                         help='Output CSV file (default: hymn_results.csv)')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
+    parser.add_argument('--no-tune', action='store_true', help='Skip fetching tune information (faster)')
     
     args = parser.parse_args()
     
@@ -215,52 +209,51 @@ Examples:
         searcher = HymnSearcher(debug=args.debug)
         
         # Search for hymns
-        hymn_urls = searcher.search(args.query)
+        hymn_results = searcher.search(args.query)
         
-        if not hymn_urls:
+        if not hymn_results:
             print(f"❌ No hymns found for: \"{args.query}\"")
             if args.debug:
                 print(f"💡 Check debug_search.html to see what was loaded")
             sys.exit(1)
         
-        print(f"\n📚 Found {len(hymn_urls)} result(s)")
-        print(f"📝 Extracting hymn data...")
+        print(f"\n📚 Found {len(hymn_results)} result(s)")
         
-        # Extract data from each hymn
-        hymns = []
-        for i, url in enumerate(hymn_urls, 1):
-            print(f"\n  [{i}/{len(hymn_urls)}] {url.split('/')[-1]}")
-            data = searcher.extract_hymn_data(url)
-            if data:
-                hymns.append(data)
-        
-        if not hymns:
-            print(f"\n❌ No hymn data could be extracted")
-            sys.exit(1)
+        # Extract tune if not skipped
+        if not args.no_tune:
+            print(f"📝 Extracting tune information...")
+            for i, hymn in enumerate(hymn_results, 1):
+                print(f"  [{i}/{len(hymn_results)}] {hymn['title']}")
+                tune = searcher.extract_tune(hymn['url'])
+                hymn['tune'] = tune
+        else:
+            # Add empty tune field for consistency
+            for hymn in hymn_results:
+                hymn['tune'] = ""
         
         # Write to CSV
         output_path = Path(args.output)
         with open(output_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=['title', 'author', 'tune', 'url'])
             writer.writeheader()
-            writer.writerows(hymns)
+            writer.writerows(hymn_results)
         
         print(f"\n✅ Success!")
-        print(f"✓ Found {len(hymns)} hymn(s)")
+        print(f"✓ Found {len(hymn_results)} hymn(s)")
         print(f"✓ Saved to: {output_path.resolve()}")
         
         # Display preview
         print(f"\n📋 Preview:")
         print(f"{'Title':<50} {'Author':<30} {'Tune':<30}")
         print("-" * 110)
-        for hymn in hymns[:5]:
+        for hymn in hymn_results[:5]:
             title = hymn['title'][:47] + "..." if len(hymn['title']) > 50 else hymn['title']
             author = hymn['author'][:27] + "..." if len(hymn['author']) > 30 else hymn['author']
             tune = hymn['tune'][:27] + "..." if len(hymn['tune']) > 30 else hymn['tune']
             print(f"{title:<50} {author:<30} {tune:<30}")
         
-        if len(hymns) > 5:
-            print(f"... and {len(hymns) - 5} more")
+        if len(hymn_results) > 5:
+            print(f"... and {len(hymn_results) - 5} more")
     
     except KeyboardInterrupt:
         print("\n⚠ Interrupted by user")
