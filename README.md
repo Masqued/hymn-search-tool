@@ -1,55 +1,82 @@
 # Hymn Search Tool
 
-A bash script to search [hymnary.org](https://hymnary.org) for hymn titles and export results to a CSV file with title, author, and tune name.
+A Python tool to search [hymnary.org](https://hymnary.org) for hymn titles and export results to a CSV file with title, author, and tune name.
+
+## Features
+
+- ✅ Searches hymnary.org by hymn title, author, or tune name
+- ✅ Handles JavaScript security challenges with Playwright browser automation
+- ✅ Exports results to CSV format
+- ✅ Properly formatted CSV with quoted fields
+- ✅ Color-coded terminal output
+- ✅ Progress indicators
+- ✅ Debug mode for troubleshooting
+- ✅ Graceful error handling
 
 ## Requirements
 
-- `bash` (version 4.0+)
-- `curl` - for fetching web pages
-- `jq` - for URL encoding
-- `grep` - for pattern matching
+- Python 3.7+
+- Playwright (for browser automation to handle JavaScript)
+- BeautifulSoup4 (for HTML parsing)
 
-### Installation
+## Installation
 
-On Ubuntu/Debian:
+### 1. Clone the repository
 ```bash
-sudo apt-get install curl jq
+git clone https://github.com/Masqued/hymn-search-tool.git
+cd hymn-search-tool
 ```
 
-On macOS:
+### 2. Create a virtual environment (recommended)
 ```bash
-brew install curl jq
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+### 3. Install Python dependencies
+```bash
+pip install playwright beautifulsoup4
+```
+
+### 4. Install browser drivers
+```bash
+playwright install chromium
 ```
 
 ## Usage
 
 ### Basic Search
 ```bash
-./hymn-search.sh "hymn search term"
+python hymn_search.py "hymn search term"
 ```
 
-This will search hymnary.org for hymns matching your query and save results to `hymn_results.csv` in the current directory.
+This will search hymnary.org for hymns matching your query and save results to `hymn_results.csv`.
 
 ### Custom Output File
 ```bash
-./hymn-search.sh "hymn search term" "my_hymns.csv"
+python hymn_search.py "hymn search term" "my_hymns.csv"
 ```
 
-This saves results to `my_hymns.csv` instead of the default filename.
+### Debug Mode
+```bash
+python hymn_search.py "hymn search term" --debug
+```
+
+Shows detailed output about the search process and data extraction.
 
 ### Examples
 ```bash
 # Search for hymns by title
-./hymn-search.sh "Amazing Grace"
+python hymn_search.py "Amazing Grace"
 
 # Search for hymns by author
-./hymn-search.sh "Charles Wesley"
+python hymn_search.py "Charles Wesley" wesley_hymns.csv
 
-# Search for hymns by tune name
-./hymn-search.sh "Hymn Tune"
+# Search for hymns by tune name with debug output
+python hymn_search.py "Gospel" gospel_hymns.csv --debug
 
-# Save to custom file
-./hymn-search.sh "Gospel" "gospel_hymns.csv"
+# Get help
+python hymn_search.py --help
 ```
 
 ## Output Format
@@ -57,22 +84,12 @@ This saves results to `my_hymns.csv` instead of the default filename.
 The script generates a CSV file with three columns:
 
 ```csv
-Title,Author,Tune Name
+title,author,tune
 "Amazing Grace","John Newton","New Britain"
 "Jesus Loves Me","Anna Bartlett Warner","William Bradbury"
 ```
 
-The CSV is properly formatted with quoted fields and escaped quotes for safe import into spreadsheets.
-
-## Features
-
-- ✅ Searches hymnary.org by hymn title, author, or tune name
-- ✅ Exports results to CSV format
-- ✅ Properly escapes special characters and quotes
-- ✅ Color-coded output for easy reading
-- ✅ Progress indicators for each hymn processed
-- ✅ Error handling for missing dependencies
-- ✅ Preview of results in terminal
+The CSV is properly formatted for import into spreadsheets and databases.
 
 ## CSV Import
 
@@ -82,37 +99,82 @@ You can import the generated CSV file into:
 - **Database** - Use standard CSV import tools
 - **Python/R** - Use `pandas.read_csv()` or `read.csv()`
 
+Example in Python:
+```python
+import pandas as pd
+df = pd.read_csv('hymn_results.csv')
+print(df.head())
+```
+
 ## How It Works
 
-1. Takes your search query and URL-encodes it
-2. Fetches search results from hymnary.org
-3. Extracts hymn IDs from search results
-4. For each hymn found:
+1. Launches a headless Chromium browser using Playwright
+2. Navigates to hymnary.org search page with your query
+3. Waits for the page to fully load (including any JavaScript)
+4. Extracts all hymn links from the search results
+5. For each hymn found:
    - Fetches the individual hymn page
    - Parses the HTML to extract title, author, and tune name
-   - Cleans up HTML entities
    - Appends to CSV file
-5. Displays results summary and preview
+6. Displays results summary and preview
 
 ## Notes
 
-- The script respects hymnary.org's server by processing hymns sequentially
+- The first run may take a while as Playwright initializes the browser
+- Subsequent searches will be faster
 - Large search result sets may take several minutes to process
 - Tune names may be blank for some hymns if not listed on hymnary.org
 - Author information may vary depending on what's available in the hymn database
+- The tool respects the website's bandwidth by processing sequentially
 
 ## Troubleshooting
 
-**"curl: command not found"** - Install curl (see Requirements above)
-
-**"jq: command not found"** - Install jq (see Requirements above)
-
-**"No hymns found"** - Try a different search term; hymnary.org may not have results for your query
-
-**Permission denied** - Make the script executable:
+**"ModuleNotFoundError: No module named 'playwright'"**
 ```bash
-chmod +x hymn-search.sh
+pip install playwright beautifulsoup4
+playwright install chromium
 ```
+
+**"No hymns found for query"**
+- Try a different search term
+- hymnary.org may not have results for your specific query
+- Try searching by author or tune name instead
+
+**Script runs very slowly**
+- This is normal on first run due to browser initialization
+- Subsequent runs will be faster
+- The page needs time to load all content
+
+**Permission denied on Linux/Mac**
+```bash
+chmod +x hymn_search.py
+```
+
+## Performance
+
+- First run: ~15-30 seconds to initialize
+- Subsequent searches: ~2-5 seconds per hymn
+- Search with 10 results: ~30-60 seconds total
+
+## Advanced Usage
+
+### Using in a script
+```python
+from hymn_search import HymnSearcher
+
+with HymnSearcher(debug=False) as searcher:
+    hymn_urls = searcher.search("Amazing Grace")
+    for url in hymn_urls:
+        data = searcher.extract_hymn_data(url)
+        print(data)
+```
+
+### Environment variables
+- `DEBUG=true` - Enable debug output (via command line is easier)
+
+## Bash Version (Legacy)
+
+There is also a legacy bash version (`hymn-search.sh`) that doesn't require Python, but it cannot bypass JavaScript security challenges on the website. The Python version is recommended.
 
 ## License
 
@@ -121,3 +183,8 @@ MIT License - feel free to modify and distribute
 ## Contributing
 
 Suggestions and improvements welcome! Feel free to open issues or submit pull requests.
+
+## Dependencies
+
+- **playwright** - Browser automation for handling JavaScript security
+- **beautifulsoup4** - HTML parsing library
