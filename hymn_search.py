@@ -71,17 +71,41 @@ class HymnSearcher:
         
         page = self.context.new_page()
         try:
-            # Navigate to search page
-            search_url = f"{self.BASE_URL}/search?query={query.replace(' ', '+')}"
-            if self.debug:
-                print(f"   URL: {search_url}")
+            # Try different search parameter variations
+            search_urls = [
+                f"{self.BASE_URL}/search?qu={query.replace(' ', '+')}",
+                f"{self.BASE_URL}/search?query={query.replace(' ', '+')}",
+                f"{self.BASE_URL}/search?keywords={query.replace(' ', '+')}",
+            ]
             
-            page.goto(search_url, wait_until="networkidle", timeout=self.TIMEOUT)
+            content = None
+            for search_url in search_urls:
+                if self.debug:
+                    print(f"   Trying URL: {search_url}")
+                
+                try:
+                    page.goto(search_url, wait_until="networkidle", timeout=self.TIMEOUT)
+                    content = page.content()
+                    
+                    # Check if we got actual search results
+                    if 'hymn' in content.lower() or 'result' in content.lower():
+                        if self.debug:
+                            print(f"   ✓ Got results from this URL")
+                        break
+                except Exception as e:
+                    if self.debug:
+                        print(f"   ✗ Failed: {e}")
+                    continue
             
-            # Wait for results to load
+            if not content:
+                if self.debug:
+                    print(f"   Could not load search results")
+                return []
+            
+            # Wait a bit for JavaScript to render
             time.sleep(2)
             
-            # Get page content
+            # Get fresh content after wait
             content = page.content()
             
             if self.debug:
@@ -90,10 +114,10 @@ class HymnSearcher:
             # Parse HTML
             soup = BeautifulSoup(content, 'html.parser')
             
-            # Find all hymn links
+            # Find all hymn links - check multiple possible selectors
             hymn_links = []
             
-            # Look for links containing 'hymn' or 'text'
+            # Strategy 1: Look for links with hymn or text in href
             for link in soup.find_all('a', href=True):
                 href = link['href']
                 if '/hymn/' in href or '/text/' in href:
@@ -103,6 +127,18 @@ class HymnSearcher:
                     elif href.startswith('http'):
                         hymn_links.append(href)
             
+            # Strategy 2: Look for result container patterns (common in search results)
+            if not hymn_links:
+                # Try to find search result containers
+                for result_div in soup.find_all(['div', 'li'], class_=['result', 'search-result', 'hymn-result']):
+                    link = result_div.find('a', href=True)
+                    if link:
+                        href = link['href']
+                        if href.startswith('/'):
+                            hymn_links.append(urljoin(self.BASE_URL, href))
+                        elif href.startswith('http'):
+                            hymn_links.append(href)
+            
             # Remove duplicates and sort
             hymn_links = sorted(list(set(hymn_links)))
             
@@ -110,6 +146,10 @@ class HymnSearcher:
                 print(f"   Found {len(hymn_links)} hymn link(s)")
                 for link in hymn_links[:5]:
                     print(f"     - {link}")
+                # Save HTML for debugging
+                with open('debug_search.html', 'w', encoding='utf-8') as f:
+                    f.write(content)
+                print(f"   Saved page HTML to debug_search.html")
             
             return hymn_links
         
@@ -182,7 +222,8 @@ class HymnSearcher:
             return {
                 'title': title,
                 'author': author,
-                'tune': tune
+                'tune': tune,
+                'url': url
             }
         
         except PlaywrightTimeout:
@@ -229,6 +270,8 @@ Examples:
             
             if not hymn_urls:
                 print(f"❌ No hymns found for: \"{args.query}\"")
+                if args.debug:
+                    print(f"💡 Try running with --debug flag to see what's happening")
                 sys.exit(1)
             
             print(f"\n📚 Found {len(hymn_urls)} result(s)")
@@ -249,7 +292,7 @@ Examples:
             # Write to CSV
             output_path = Path(args.output)
             with open(output_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=['title', 'author', 'tune'])
+                writer = csv.DictWriter(f, fieldnames=['title', 'author', 'tune', 'url'])
                 writer.writeheader()
                 writer.writerows(hymns)
             
