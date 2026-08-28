@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Hymn Search Tool - Search hymnary.org for hymn titles and export to CSV
+Uses direct HTTP requests instead of browser automation to bypass security challenges
 Usage: python hymn_search.py "search term" [output_file.csv]
 """
 
@@ -13,71 +14,40 @@ from typing import List, Dict, Optional
 from urllib.parse import urljoin
 
 try:
-    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+    import requests
     from bs4 import BeautifulSoup
 except ImportError as e:
     print(f"Error: Required packages not found.")
     print(f"Please install dependencies with:")
-    print(f"  pip install playwright beautifulsoup4")
-    print(f"Then install browsers with:")
-    print(f"  playwright install")
+    print(f"  pip install requests beautifulsoup4")
     sys.exit(1)
 
 
 class HymnSearcher:
-    """Search hymnary.org and extract hymn data."""
+    """Search hymnary.org and extract hymn data using HTTP requests."""
     
     BASE_URL = "https://hymnary.org"
-    TIMEOUT = 90000  # 90 seconds for challenge solving
+    TIMEOUT = 30
     
-    def __init__(self, debug: bool = False, headless: bool = False):
+    def __init__(self, debug: bool = False):
         """Initialize the searcher."""
         self.debug = debug
-        self.headless = headless
-        self.playwright = None
-        self.browser = None
-        self.context = None
-        
-    def __enter__(self):
-        """Context manager entry."""
-        self.start()
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
-        self.stop()
-    
-    def start(self):
-        """Start the Playwright browser."""
-        print("🌐 Launching browser...")
-        if not self.headless:
-            print("   (Browser window will open - please solve any security challenges)")
-        self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=self.headless)
-        self.context = self.browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            extra_http_headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Cache-Control": "max-age=0",
-            }
-        )
-    
-    def stop(self):
-        """Stop the browser and cleanup."""
-        if self.context:
-            self.context.close()
-        if self.browser:
-            self.browser.close()
-        if self.playwright:
-            self.playwright.stop()
-        print("✓ Browser closed")
+        self.session = requests.Session()
+        # Set realistic browser headers
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        })
     
     def search(self, query: str) -> List[str]:
         """Search hymnary.org and return list of hymn URLs."""
         print(f"🔍 Searching for: \"{query}\"")
         
-        page = self.context.new_page()
         try:
             # Use the correct parameter: qu=
             search_url = f"{self.BASE_URL}/search?qu={query.replace(' ', '+')}"
@@ -86,23 +56,10 @@ class HymnSearcher:
                 print(f"   URL: {search_url}")
             
             print("   Loading search page...")
-            page.goto(search_url, wait_until="networkidle", timeout=self.TIMEOUT)
+            response = self.session.get(search_url, timeout=self.TIMEOUT)
+            response.raise_for_status()
             
-            if self.debug:
-                print(f"   Page loaded, waiting for challenge resolution...")
-            
-            # Wait for content to fully load and challenge to be solved
-            time.sleep(3)
-            
-            # Try to wait for search results to appear
-            try:
-                page.wait_for_selector('a', timeout=15000)
-            except PlaywrightTimeout:
-                if self.debug:
-                    print(f"   Timeout waiting for links")
-            
-            # Get page content
-            content = page.content()
+            content = response.text
             
             if self.debug:
                 print(f"   Page loaded ({len(content)} bytes)")
@@ -110,9 +67,12 @@ class HymnSearcher:
             # Check if we're still on the challenge page
             if "bunny-shield" in content or "Establishing" in content:
                 if self.debug:
-                    print(f"   ⚠ Still on security challenge page - waiting longer...")
-                time.sleep(5)
-                content = page.content()
+                    print(f"   ⚠ Got security challenge page - retrying...")
+                # Wait a moment and retry
+                time.sleep(2)
+                response = self.session.get(search_url, timeout=self.TIMEOUT)
+                response.raise_for_status()
+                content = response.text
             
             # Parse HTML
             soup = BeautifulSoup(content, 'html.parser')
@@ -120,7 +80,7 @@ class HymnSearcher:
             # Find all hymn links
             hymn_links = []
             
-            # Strategy 1: Look for links with hymn or text in href
+            # Look for links with hymn or text in href
             for link in soup.find_all('a', href=True):
                 href = link['href']
                 if '/hymn/' in href or '/text/' in href:
@@ -144,20 +104,20 @@ class HymnSearcher:
             
             return hymn_links
         
-        finally:
-            page.close()
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Request error: {e}")
+            return []
     
     def extract_hymn_data(self, url: str) -> Optional[Dict[str, str]]:
         """Extract hymn data from a hymn page."""
-        page = self.context.new_page()
         try:
             if self.debug:
                 print(f"   Fetching: {url}")
             
-            page.goto(url, wait_until="networkidle", timeout=self.TIMEOUT)
-            time.sleep(1)
+            response = self.session.get(url, timeout=self.TIMEOUT)
+            response.raise_for_status()
             
-            content = page.content()
+            content = response.text
             soup = BeautifulSoup(content, 'html.parser')
             
             # Extract title
@@ -217,17 +177,14 @@ class HymnSearcher:
                 'url': url
             }
         
-        except PlaywrightTimeout:
-            print(f"     ⚠ Timeout loading page: {url}")
+        except requests.exceptions.RequestException as e:
+            print(f"     ⚠ Error loading page: {e}")
             return None
         
         except Exception as e:
             if self.debug:
                 print(f"     ⚠ Error processing page: {e}")
             return None
-        
-        finally:
-            page.close()
 
 
 def main():
@@ -240,7 +197,6 @@ Examples:
   python hymn_search.py "Amazing Grace"
   python hymn_search.py "Charles Wesley" results.csv
   python hymn_search.py "Gospel" results.csv --debug
-  python hymn_search.py "Gospel" results.csv --headless
         """
     )
     
@@ -248,7 +204,6 @@ Examples:
     parser.add_argument('output', nargs='?', default='hymn_results.csv',
                         help='Output CSV file (default: hymn_results.csv)')
     parser.add_argument('--debug', action='store_true', help='Enable debug output')
-    parser.add_argument('--headless', action='store_true', help='Run in headless mode (faster but may fail security challenges)')
     
     args = parser.parse_args()
     
@@ -257,54 +212,55 @@ Examples:
         sys.exit(1)
     
     try:
-        with HymnSearcher(debug=args.debug, headless=args.headless) as searcher:
-            # Search for hymns
-            hymn_urls = searcher.search(args.query)
-            
-            if not hymn_urls:
-                print(f"❌ No hymns found for: \"{args.query}\"")
-                if args.debug:
-                    print(f"💡 Check debug_search.html to see what was loaded")
-                sys.exit(1)
-            
-            print(f"\n📚 Found {len(hymn_urls)} result(s)")
-            print(f"📝 Extracting hymn data...")
-            
-            # Extract data from each hymn
-            hymns = []
-            for i, url in enumerate(hymn_urls, 1):
-                print(f"\n  [{i}/{len(hymn_urls)}] {url.split('/')[-1]}")
-                data = searcher.extract_hymn_data(url)
-                if data:
-                    hymns.append(data)
-            
-            if not hymns:
-                print(f"\n❌ No hymn data could be extracted")
-                sys.exit(1)
-            
-            # Write to CSV
-            output_path = Path(args.output)
-            with open(output_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=['title', 'author', 'tune', 'url'])
-                writer.writeheader()
-                writer.writerows(hymns)
-            
-            print(f"\n✅ Success!")
-            print(f"✓ Found {len(hymns)} hymn(s)")
-            print(f"✓ Saved to: {output_path.resolve()}")
-            
-            # Display preview
-            print(f"\n📋 Preview:")
-            print(f"{'Title':<50} {'Author':<30} {'Tune':<30}")
-            print("-" * 110)
-            for hymn in hymns[:5]:
-                title = hymn['title'][:47] + "..." if len(hymn['title']) > 50 else hymn['title']
-                author = hymn['author'][:27] + "..." if len(hymn['author']) > 30 else hymn['author']
-                tune = hymn['tune'][:27] + "..." if len(hymn['tune']) > 30 else hymn['tune']
-                print(f"{title:<50} {author:<30} {tune:<30}")
-            
-            if len(hymns) > 5:
-                print(f"... and {len(hymns) - 5} more")
+        searcher = HymnSearcher(debug=args.debug)
+        
+        # Search for hymns
+        hymn_urls = searcher.search(args.query)
+        
+        if not hymn_urls:
+            print(f"❌ No hymns found for: \"{args.query}\"")
+            if args.debug:
+                print(f"💡 Check debug_search.html to see what was loaded")
+            sys.exit(1)
+        
+        print(f"\n📚 Found {len(hymn_urls)} result(s)")
+        print(f"📝 Extracting hymn data...")
+        
+        # Extract data from each hymn
+        hymns = []
+        for i, url in enumerate(hymn_urls, 1):
+            print(f"\n  [{i}/{len(hymn_urls)}] {url.split('/')[-1]}")
+            data = searcher.extract_hymn_data(url)
+            if data:
+                hymns.append(data)
+        
+        if not hymns:
+            print(f"\n❌ No hymn data could be extracted")
+            sys.exit(1)
+        
+        # Write to CSV
+        output_path = Path(args.output)
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['title', 'author', 'tune', 'url'])
+            writer.writeheader()
+            writer.writerows(hymns)
+        
+        print(f"\n✅ Success!")
+        print(f"✓ Found {len(hymns)} hymn(s)")
+        print(f"✓ Saved to: {output_path.resolve()}")
+        
+        # Display preview
+        print(f"\n📋 Preview:")
+        print(f"{'Title':<50} {'Author':<30} {'Tune':<30}")
+        print("-" * 110)
+        for hymn in hymns[:5]:
+            title = hymn['title'][:47] + "..." if len(hymn['title']) > 50 else hymn['title']
+            author = hymn['author'][:27] + "..." if len(hymn['author']) > 30 else hymn['author']
+            tune = hymn['tune'][:27] + "..." if len(hymn['tune']) > 30 else hymn['tune']
+            print(f"{title:<50} {author:<30} {tune:<30}")
+        
+        if len(hymns) > 5:
+            print(f"... and {len(hymns) - 5} more")
     
     except KeyboardInterrupt:
         print("\n⚠ Interrupted by user")
