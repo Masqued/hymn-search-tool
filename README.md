@@ -16,7 +16,6 @@ A Python tool to search [hymnary.org](https://hymnary.org) for hymn titles and e
 ## Requirements
 
 - Python 3.7+
-- Playwright (for browser automation to handle JavaScript)
 - BeautifulSoup4 (for HTML parsing)
 
 ## Installation
@@ -35,12 +34,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 ### 3. Install Python dependencies
 ```bash
-pip install playwright beautifulsoup4
-```
-
-### 4. Install browser drivers
-```bash
-playwright install chromium
+pip install beautifulsoup4
 ```
 
 ## Usage
@@ -86,7 +80,6 @@ The script generates a CSV file with three columns:
 ```csv
 title,author,tune
 "Amazing Grace","John Newton","New Britain"
-"Jesus Loves Me","Anna Bartlett Warner","William Bradbury"
 ```
 
 The CSV is properly formatted for import into spreadsheets and databases.
@@ -108,7 +101,7 @@ print(df.head())
 
 ## How It Works
 
-1. Launches a headless Chromium browser using Playwright
+1. Performes http request
 2. Navigates to hymnary.org search page with your query
 3. Waits for the page to fully load (including any JavaScript)
 4. Extracts all hymn links from the search results
@@ -120,8 +113,6 @@ print(df.head())
 
 ## Notes
 
-- The first run may take a while as Playwright initializes the browser
-- Subsequent searches will be faster
 - Large search result sets may take several minutes to process
 - Tune names may be blank for some hymns if not listed on hymnary.org
 - Author information may vary depending on what's available in the hymn database
@@ -140,11 +131,6 @@ playwright install chromium
 - hymnary.org may not have results for your specific query
 - Try searching by author or tune name instead
 
-**Script runs very slowly**
-- This is normal on first run due to browser initialization
-- Subsequent runs will be faster
-- The page needs time to load all content
-
 **Permission denied on Linux/Mac**
 ```bash
 chmod +x hymn_search.py
@@ -152,8 +138,6 @@ chmod +x hymn_search.py
 
 ## Performance
 
-- First run: ~15-30 seconds to initialize
-- Subsequent searches: ~2-5 seconds per hymn
 - Search with 10 results: ~30-60 seconds total
 
 ## Advanced Usage
@@ -172,10 +156,6 @@ with HymnSearcher(debug=False) as searcher:
 ### Environment variables
 - `DEBUG=true` - Enable debug output (via command line is easier)
 
-## Bash Version (Legacy)
-
-There is also a legacy bash version (`hymn-search.sh`) that doesn't require Python, but it cannot bypass JavaScript security challenges on the website. The Python version is recommended.
-
 ## License
 
 MIT License - feel free to modify and distribute
@@ -186,5 +166,4 @@ Suggestions and improvements welcome! Feel free to open issues or submit pull re
 
 ## Dependencies
 
-- **playwright** - Browser automation for handling JavaScript security
 - **beautifulsoup4** - HTML parsing library
