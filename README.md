@@ -16,6 +16,7 @@ A Python tool to search [hymnary.org](https://hymnary.org) for hymn titles and e
 ## Requirements
 
 - Python 3.7+
+- Playwright
 - BeautifulSoup4 (for HTML parsing)
 
 ## Installation
@@ -34,7 +35,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 ### 3. Install Python dependencies
 ```bash
-pip install beautifulsoup4
+pip install playwright beautifulsoup4
 ```
 
 ## Usage
