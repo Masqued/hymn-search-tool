@@ -156,17 +156,20 @@ class HymnSearcher:
             content = response.text
             soup = BeautifulSoup(content, 'html.parser')
             
-            # Look for tune information
+            # Look for the link with href="#tune" that contains the tune name
+            # The link text looks like: "Tune: NEW BRITAIN"
             tune = ""
-            tune_span = soup.find('span', attrs={'data-fieldname': 'tune'})
-            if tune_span:
-                # Get the text and remove the "Tune: " prefix
-                tune_text = tune_span.get_text().strip()
-                tune_text = tune_text.replace('Tune:', '').replace('Tune Name:', '').strip()
-                tune = tune_text
-                
-                if self.debug:
-                    print(f"       Tune: {tune if tune else '(not found)'}")
+            
+            # Find all links and look for one with href="#tune"
+            for link in soup.find_all('a', href='#tune'):
+                link_text = link.get_text().strip()
+                if link_text.startswith('Tune:'):
+                    # Extract the tune name after "Tune: "
+                    tune = link_text.replace('Tune:', '').strip()
+                    break
+            
+            if self.debug:
+                print(f"       Tune: {tune if tune else '(not found)'}")
             
             return tune
         
@@ -190,6 +193,7 @@ Examples:
   python hymn_search.py "Amazing Grace"
   python hymn_search.py "Charles Wesley" results.csv
   python hymn_search.py "Gospel" results.csv --debug
+  python hymn_search.py "Gospel" results.csv --no-tune
         """
     )
     
