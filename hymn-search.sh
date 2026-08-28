@@ -24,7 +24,7 @@ if [[ -z "$SEARCH_QUERY" ]]; then
 fi
 
 # Check for required tools
-for cmd in curl jq; do
+for cmd in curl; do
     if ! command -v "$cmd" &> /dev/null; then
         echo -e "${RED}Error: $cmd is required but not installed${NC}"
         exit 1
@@ -36,31 +36,50 @@ echo -e "${YELLOW}Searching hymnary.org for: \"$SEARCH_QUERY\"${NC}"
 # Create CSV header
 echo "Title,Author,Tune Name" > "$OUTPUT_FILE"
 
-# Search hymnary.org using their search endpoint
-# The script fetches the search results page and parses hymn data
-SEARCH_URL="${HYMNARY_URL}/search?query=$(printf '%s\n' "$SEARCH_QUERY" | jq -sRr @uri)"
+# URL encode the search query
+encode_url() {
+    local string="$1"
+    echo -n "$string" | od -An -tx1 | tr ' ' % | tr -d '\n'
+}
+
+ENCODED_QUERY=$(encode_url "$SEARCH_QUERY")
+SEARCH_URL="${HYMNARY_URL}/search?query=${ENCODED_QUERY}"
 
 echo -e "${YELLOW}Fetching results from: $SEARCH_URL${NC}"
 
 # Use curl to fetch the search results
 # Parse the HTML to extract hymn information
-curl -s "$SEARCH_URL" | grep -oP '(?<=<a href="/hymn/)[^"]*' | while read -r hymn_id; do
-    echo -e "${YELLOW}Processing hymn: $hymn_id${NC}"
+HYMN_IDS=$(curl -s "$SEARCH_URL" | grep -o 'href="/hymn/[^"]*' | sed 's/href="\/hymn\///' | sed 's/"$//')
+
+# Counter for results
+COUNT=0
+
+while IFS= read -r hymn_id; do
+    [[ -z "$hymn_id" ]] && continue
+    
+    COUNT=$((COUNT + 1))
+    echo -e "${YELLOW}Processing hymn $COUNT: $hymn_id${NC}"
     
     # Fetch individual hymn page
     hymn_page=$(curl -s "${HYMNARY_URL}/hymn/${hymn_id}")
     
-    # Extract title (from the h1 tag or meta title)
-    title=$(echo "$hymn_page" | grep -oP '(?<=<h1[^>]*>)[^<]+' | head -1 | sed 's/&amp;/\&/g; s/&quot;/"/g; s/&apos;/'\''/g; s/&lt;/</g; s/&gt;/>/g')
+    # Extract title (from h1 tag or title in page)
+    title=$(echo "$hymn_page" | grep -m1 '<h1' | sed 's/<[^>]*>//g' | sed 's/&amp;/\&/g; s/&quot;/"/g; s/&apos;/'\''/g; s/&lt;/</g; s/&gt;/>/g' | xargs)
     
-    # Extract author (from data-author or author meta tag)
-    author=$(echo "$hymn_page" | grep -oP 'Author[s]?:?\s*</?\w+[^>]*>\s*\K[^<]+' | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/&amp;/\&/g; s/&quot;/"/g; s/&apos;/'\''/g; s/&lt;/</g; s/&gt;/>/g')
+    # If title is empty, try alternative extraction
+    if [[ -z "$title" ]]; then
+        title=$(echo "$hymn_page" | grep -m1 '<title>' | sed 's/<[^>]*>//g' | sed 's/ - Hymnary\.org.*//' | xargs)
+    fi
     
-    # Extract tune name (from Tune: field or music data)
-    tune=$(echo "$hymn_page" | grep -oP 'Tune[^:]*:\s*</?\w+[^>]*>\s*\K[^<]+' | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed 's/&amp;/\&/g; s/&quot;/"/g; s/&apos;/'\''/g; s/&lt;/</g; s/&gt;/>/g')
+    # Extract author - look for "Author" or "Words by" patterns
+    author=$(echo "$hymn_page" | grep -i 'author\|words by' | head -1 | sed 's/<[^>]*>//g' | sed 's/Author[s]*://i; s/Words by://i; s/^[[:space:]]*//; s/[[:space:]]*$//' | sed 's/&amp;/\&/g; s/&quot;/"/g; s/&apos;/'\''/g; s/&lt;/</g; s/&gt;/>/g' | xargs)
+    
+    # Extract tune name - look for "Tune" patterns
+    tune=$(echo "$hymn_page" | grep -i 'tune' | head -1 | sed 's/<[^>]*>//g' | sed 's/Tune[^:]*://i; s/^[[:space:]]*//; s/[[:space:]]*$//' | sed 's/&amp;/\&/g; s/&quot;/"/g; s/&apos;/'\''/g; s/&lt;/</g; s/&gt;/>/g' | xargs)
     
     # Skip if no title found
     if [[ -z "$title" ]]; then
+        echo -e "${YELLOW}  Skipping - no title found${NC}"
         continue
     fi
     
@@ -71,17 +90,22 @@ curl -s "$SEARCH_URL" | grep -oP '(?<=<a href="/hymn/)[^"]*' | while read -r hym
     
     # Append to CSV
     echo "\"$title\",\"$author\",\"$tune\"" >> "$OUTPUT_FILE"
+    echo -e "${GREEN}  ✓ Added: $title${NC}"
     
-done
+done <<< "$HYMN_IDS"
 
 # Check if results were found
-if [[ $(wc -l < "$OUTPUT_FILE") -gt 1 ]]; then
+TOTAL_LINES=$(wc -l < "$OUTPUT_FILE")
+RESULT_COUNT=$((TOTAL_LINES - 1))
+
+if [[ $RESULT_COUNT -gt 0 ]]; then
     echo -e "${GREEN}Success! Results saved to: $OUTPUT_FILE${NC}"
-    echo -e "${GREEN}Found $(( $(wc -l < "$OUTPUT_FILE") - 1 )) hymn(s)${NC}"
+    echo -e "${GREEN}Found $RESULT_COUNT hymn(s)${NC}"
     # Display preview
     echo -e "${YELLOW}\nPreview:${NC}"
-    head -5 "$OUTPUT_FILE" | column -t -s',' | sed 's/^/  /'
+    head -6 "$OUTPUT_FILE" | column -t -s',' 2>/dev/null || head -6 "$OUTPUT_FILE"
 else
     echo -e "${YELLOW}No hymns found for query: \"$SEARCH_QUERY\"${NC}"
+    rm "$OUTPUT_FILE"
     exit 1
 fi
